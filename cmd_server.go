@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -21,10 +22,8 @@ import (
 	"github.com/songgao/water"
 )
 
-//
 // We want to make sure that we check the origin of any websocket-connections
 // and bump the size of the buffers.
-//
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:  2048,
 	WriteBufferSize: 2048,
@@ -56,6 +55,9 @@ type serverCmd struct {
 	// bindHost stores the host to bind upon
 	bindHost string
 
+	// bindAddr stores the explicit address to bind upon
+	bindAddr string
+
 	// bindPort stores the port to bind upon
 	bindPort int
 
@@ -69,9 +71,7 @@ type serverCmd struct {
 	serverIP string
 }
 
-//
 // Glue for our sub-command-library.
-//
 func (*serverCmd) Name() string     { return "server" }
 func (*serverCmd) Synopsis() string { return "Start the VPN-server." }
 func (*serverCmd) Usage() string {
@@ -80,12 +80,11 @@ func (*serverCmd) Usage() string {
 `
 }
 
-//
 // Flag setup
-//
 func (p *serverCmd) SetFlags(f *flag.FlagSet) {
 	f.IntVar(&p.mtu, "mtu", 1280, "MTU for the tunnel")
 	f.StringVar(&p.bindHost, "host", "127.0.0.1", "The IP to listen upon.")
+	f.StringVar(&p.bindAddr, "listen", "", "The address to listen upon (overrides host/port).")
 	f.IntVar(&p.bindPort, "port", 9000, "The port to bind upon.")
 }
 
@@ -194,9 +193,7 @@ func incIP(ip net.IP) {
 	}
 }
 
-//
 // Entry-point.
-//
 func (p *serverCmd) Execute(_ context.Context, f *flag.FlagSet, _ ...interface{}) subcommands.ExitStatus {
 
 	//
@@ -215,6 +212,35 @@ func (p *serverCmd) Execute(_ context.Context, f *flag.FlagSet, _ ...interface{}
 	if err != nil {
 		fmt.Printf("Failed to read configuration file %s\n", err.Error())
 		return subcommands.ExitFailure
+	}
+
+	//
+	// Allow overriding the listening address from the configuration
+	// file, unless we already received an explicit value via flags.
+	//
+	if p.bindAddr == "" {
+		cfgListen := p.Config.Get("listen")
+		if cfgListen != "" {
+			p.bindAddr = cfgListen
+		}
+	}
+
+	if p.bindAddr == "" {
+
+		//
+		// Allow host/port overrides via configuration file.
+		//
+		p.bindHost = p.Config.GetWithDefault("host", p.bindHost)
+
+		cfgPort := p.Config.Get("port")
+		if cfgPort != "" {
+			port, err := strconv.Atoi(cfgPort)
+			if err != nil {
+				fmt.Printf("Failed to parse configured port '%s' - %s\n", cfgPort, err.Error())
+				return subcommands.ExitFailure
+			}
+			p.bindPort = port
+		}
 	}
 
 	//
@@ -320,7 +346,10 @@ func (p *serverCmd) Execute(_ context.Context, f *flag.FlagSet, _ ...interface{}
 	//
 	// Prepare to bind, by building up a listening-address.
 	//
-	bind := fmt.Sprintf("%s:%d", p.bindHost, p.bindPort)
+	bind := p.bindAddr
+	if bind == "" {
+		bind = fmt.Sprintf("%s:%d", p.bindHost, p.bindPort)
+	}
 	fmt.Printf("Launching the server on http://%s\n", bind)
 
 	//
@@ -416,7 +445,6 @@ func (p *serverCmd) refreshPeers(socket shared.Socket) error {
 //
 // We keep track of which clients have connected and ensure
 // that we cleanup when they exit.
-//
 func (p *serverCmd) serveWs(w http.ResponseWriter, r *http.Request) {
 
 	//

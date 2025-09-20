@@ -88,6 +88,10 @@ With your configuration-file you can now launch the VPN-server like so:
 
      # simple-vpn server ./server.cfg
 
+By default the server listens on `127.0.0.1:9000`.  You can change this
+either by using the command line flags `-host`, `-port`, or `-listen`, or
+by setting `listen`, `host` and/or `port` in the configuration file.
+
 To proxy traffic to this server, via `nginx`, you could have a configuration file like this:
 
     server {
